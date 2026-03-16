@@ -622,18 +622,22 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         if 'conn' in locals():
             conn.close()
 
-def send_message(recipient: str, message: str) -> Tuple[bool, str]:
+def send_message(recipient: str, message: str, quoted_message_id: str = None, quoted_chat_jid: str = None) -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
             return False, "Recipient must be provided"
-        
+
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
             "recipient": recipient,
             "message": message,
         }
-        
+        if quoted_message_id:
+            payload["quoted_message_id"] = quoted_message_id
+        if quoted_chat_jid:
+            payload["quoted_chat_jid"] = quoted_chat_jid
+
         response = requests.post(url, json=payload)
         
         # Check if the request was successful
@@ -650,24 +654,29 @@ def send_message(recipient: str, message: str) -> Tuple[bool, str]:
     except Exception as e:
         return False, f"Unexpected error: {str(e)}"
 
-def send_file(recipient: str, media_path: str) -> Tuple[bool, str]:
+def send_file(recipient: str, media_path: str, message: str = "", quoted_message_id: str = None, quoted_chat_jid: str = None) -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
             return False, "Recipient must be provided"
-        
+
         if not media_path:
             return False, "Media path must be provided"
-        
+
         if not os.path.isfile(media_path):
             return False, f"Media file not found: {media_path}"
-        
+
         url = f"{WHATSAPP_API_BASE_URL}/send"
         payload = {
             "recipient": recipient,
-            "media_path": media_path
+            "media_path": media_path,
+            "message": message
         }
-        
+        if quoted_message_id:
+            payload["quoted_message_id"] = quoted_message_id
+        if quoted_chat_jid:
+            payload["quoted_chat_jid"] = quoted_chat_jid
+
         response = requests.post(url, json=payload)
         
         # Check if the request was successful
