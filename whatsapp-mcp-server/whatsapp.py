@@ -622,7 +622,7 @@ def get_direct_chat_by_contact(sender_phone_number: str) -> Optional[Chat]:
         if 'conn' in locals():
             conn.close()
 
-def send_message(recipient: str, message: str, quoted_message_id: str = None, quoted_chat_jid: str = None) -> Tuple[bool, str]:
+def send_message(recipient: str, message: str, quoted_message_id: str = None, quoted_chat_jid: str = None, mentions: list = None) -> Tuple[bool, str]:
     try:
         # Validate input
         if not recipient:
@@ -637,6 +637,8 @@ def send_message(recipient: str, message: str, quoted_message_id: str = None, qu
             payload["quoted_message_id"] = quoted_message_id
         if quoted_chat_jid:
             payload["quoted_chat_jid"] = quoted_chat_jid
+        if mentions:
+            payload["mentions"] = mentions
 
         response = requests.post(url, json=payload)
         

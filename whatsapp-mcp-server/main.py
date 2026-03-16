@@ -1,5 +1,7 @@
+import sqlite3
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
+from whatsapp import MESSAGES_DB_PATH
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -159,7 +161,8 @@ def send_message(
     recipient: str,
     message: str,
     quoted_message_id: str = None,
-    quoted_chat_jid: str = None
+    quoted_chat_jid: str = None,
+    mentions: list[str] = None
 ) -> Dict[str, Any]:
     """Send a WhatsApp message to a person or group. For group chats use the JID.
 
@@ -169,6 +172,7 @@ def send_message(
         message: The message text to send
         quoted_message_id: Optional message ID to reply to (quote reply)
         quoted_chat_jid: Optional chat JID where the quoted message is from
+        mentions: Optional list of JIDs to mention (e.g., ["905551234567@s.whatsapp.net"]). Use @lid format for linked devices (e.g., ["118051638898776@lid"])
 
     Returns:
         A dictionary containing success status and a status message
@@ -181,7 +185,7 @@ def send_message(
         }
 
     # Call the whatsapp_send_message function with the unified recipient parameter
-    success, status_message = whatsapp_send_message(recipient, message, quoted_message_id, quoted_chat_jid)
+    success, status_message = whatsapp_send_message(recipient, message, quoted_message_id, quoted_chat_jid, mentions)
     return {
         "success": success,
         "message": status_message
@@ -233,6 +237,70 @@ def send_audio_message(recipient: str, media_path: str) -> Dict[str, Any]:
         "success": success,
         "message": status_message
     }
+
+@mcp.tool()
+def get_contact_lid(phone_number: str) -> Dict[str, Any]:
+    """Find a contact's LID (Linked ID) JID from message history. LID JIDs are needed for mentions in group chats.
+
+    Args:
+        phone_number: Phone number to search for (with country code, no + symbol)
+
+    Returns:
+        A dictionary containing the LID JID if found
+    """
+    try:
+        db = sqlite3.connect(MESSAGES_DB_PATH)
+        cursor = db.cursor()
+        # Search for LID sender in messages where phone number appears in the chat or as sender
+        cursor.execute("""
+            SELECT DISTINCT sender FROM messages
+            WHERE sender LIKE '%@lid'
+            AND chat_jid IN (
+                SELECT DISTINCT chat_jid FROM messages WHERE sender = ? OR chat_jid LIKE ?
+            )
+            ORDER BY timestamp DESC
+        """, (phone_number, f"%{phone_number}%"))
+        lids = [row[0] for row in cursor.fetchall()]
+        db.close()
+
+        if lids:
+            return {
+                "success": True,
+                "phone_number": phone_number,
+                "lid_jids": [f"{lid}@lid" if "@" not in lid else lid for lid in lids],
+                "message": f"Found {len(lids)} LID(s) for {phone_number}"
+            }
+        else:
+            # Try direct search by phone in sender field
+            db = sqlite3.connect(MESSAGES_DB_PATH)
+            cursor = db.cursor()
+            cursor.execute("""
+                SELECT DISTINCT m2.sender FROM messages m1
+                JOIN messages m2 ON m1.chat_jid = m2.chat_jid
+                WHERE m1.sender = ? AND m2.sender LIKE '%@lid'
+                GROUP BY m2.sender
+                ORDER BY MAX(m2.timestamp) DESC
+            """, (phone_number,))
+            lids = [row[0] for row in cursor.fetchall()]
+            db.close()
+
+            if lids:
+                return {
+                    "success": True,
+                    "phone_number": phone_number,
+                    "lid_jids": [f"{lid}" if "@" in lid else f"{lid}@lid" for lid in lids],
+                    "message": f"Found {len(lids)} LID(s) in shared groups"
+                }
+
+            return {
+                "success": False,
+                "message": f"No LID found for {phone_number}. The contact may not have sent messages in any shared groups yet."
+            }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}"
+        }
 
 @mcp.tool()
 def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:

@@ -197,15 +197,16 @@ type SendMessageResponse struct {
 
 // SendMessageRequest represents the request body for the send message API
 type SendMessageRequest struct {
-	Recipient        string `json:"recipient"`
-	Message          string `json:"message"`
-	MediaPath        string `json:"media_path,omitempty"`
-	QuotedMessageID  string `json:"quoted_message_id,omitempty"`
-	QuotedChatJID    string `json:"quoted_chat_jid,omitempty"`
+	Recipient        string   `json:"recipient"`
+	Message          string   `json:"message"`
+	MediaPath        string   `json:"media_path,omitempty"`
+	QuotedMessageID  string   `json:"quoted_message_id,omitempty"`
+	QuotedChatJID    string   `json:"quoted_chat_jid,omitempty"`
+	Mentions         []string `json:"mentions,omitempty"`
 }
 
 // Function to send a WhatsApp message
-func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string, quotedMessageID string, quotedChatJID string) (bool, string) {
+func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, recipient string, message string, mediaPath string, quotedMessageID string, quotedChatJID string, mentions []string) (bool, string) {
 	if !client.IsConnected() {
 		return false, "Not connected to WhatsApp"
 	}
@@ -384,6 +385,14 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 				FileLength:    &resp.FileLength,
 			}
 		}
+	} else if len(mentions) > 0 {
+		// Use ExtendedTextMessage for mentions
+		msg.ExtendedTextMessage = &waProto.ExtendedTextMessage{
+			Text: proto.String(message),
+			ContextInfo: &waProto.ContextInfo{
+				MentionedJID: mentions,
+			},
+		}
 	} else {
 		msg.Conversation = proto.String(message)
 	}
@@ -413,6 +422,7 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 			StanzaID:      &stanzaID,
 			Participant:   participant,
 			QuotedMessage: &waProto.Message{Conversation: proto.String(quotedContent)},
+			MentionedJID:  mentions,
 		}
 
 		// Apply ContextInfo to the appropriate message type
@@ -800,7 +810,7 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		fmt.Println("Received request to send message", req.Message, req.MediaPath)
 
 		// Send the message
-		success, message := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, req.QuotedMessageID, req.QuotedChatJID)
+		success, message := sendWhatsAppMessage(client, messageStore, req.Recipient, req.Message, req.MediaPath, req.QuotedMessageID, req.QuotedChatJID, req.Mentions)
 		fmt.Println("Message sent", success, message)
 		// Set response headers
 		w.Header().Set("Content-Type", "application/json")
