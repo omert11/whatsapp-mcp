@@ -156,6 +156,57 @@ def get_message_context(
     context = whatsapp_get_message_context(message_id, before, after)
     return context
 
+def _resolve_mentions(mentions: list[str] = None) -> tuple[list[str] | None, str | None]:
+    """Resolve phone numbers in mentions to LID JIDs. Returns (resolved_jids, error)."""
+    if not mentions:
+        return None, None
+
+    resolved = []
+    for m in mentions:
+        if "@" in m:
+            # Already a JID, use as-is
+            resolved.append(m)
+        else:
+            # Phone number - look up LID
+            try:
+                db = sqlite3.connect(MESSAGES_DB_PATH)
+                cursor = db.cursor()
+                cursor.execute("""
+                    SELECT DISTINCT m2.sender FROM messages m1
+                    JOIN messages m2 ON m1.chat_jid = m2.chat_jid
+                    WHERE m1.sender = ? AND m2.sender LIKE '%@lid'
+                    AND m2.sender != m1.sender
+                    ORDER BY MAX(m2.timestamp) DESC
+                    LIMIT 1
+                """, (m,))
+                row = cursor.fetchone()
+                db.close()
+
+                if row:
+                    resolved.append(row[0] if "@" in row[0] else f"{row[0]}@lid")
+                else:
+                    # Try finding in direct chat
+                    db = sqlite3.connect(MESSAGES_DB_PATH)
+                    cursor = db.cursor()
+                    cursor.execute("""
+                        SELECT DISTINCT sender FROM messages
+                        WHERE sender LIKE '%@lid'
+                        AND chat_jid = ?
+                        ORDER BY timestamp DESC LIMIT 1
+                    """, (f"{m}@s.whatsapp.net",))
+                    row = cursor.fetchone()
+                    db.close()
+
+                    if row:
+                        resolved.append(row[0] if "@" in row[0] else f"{row[0]}@lid")
+                    else:
+                        return None, f"LID bulunamadı: {m}. Bu kişi ortak bir grupta mesaj atmamış olabilir."
+            except Exception as e:
+                return None, f"LID arama hatası: {str(e)}"
+
+    return resolved, None
+
+
 @mcp.tool()
 def send_message(
     recipient: str,
@@ -172,20 +223,23 @@ def send_message(
         message: The message text to send
         quoted_message_id: Optional message ID to reply to (quote reply)
         quoted_chat_jid: Optional chat JID where the quoted message is from
-        mentions: Optional list of JIDs to mention (e.g., ["905551234567@s.whatsapp.net"]). Use @lid format for linked devices (e.g., ["118051638898776@lid"])
+        mentions: Optional list of phone numbers to mention (e.g., ["905551234567"]). Automatically resolved to LID JIDs.
 
     Returns:
         A dictionary containing success status and a status message
     """
-    # Validate input
     if not recipient:
         return {
             "success": False,
             "message": "Recipient must be provided"
         }
 
-    # Call the whatsapp_send_message function with the unified recipient parameter
-    success, status_message = whatsapp_send_message(recipient, message, quoted_message_id, quoted_chat_jid, mentions)
+    # Resolve phone numbers to LID JIDs
+    resolved_mentions, error = _resolve_mentions(mentions)
+    if error:
+        return {"success": False, "message": error}
+
+    success, status_message = whatsapp_send_message(recipient, message, quoted_message_id, quoted_chat_jid, resolved_mentions)
     return {
         "success": success,
         "message": status_message
@@ -197,7 +251,8 @@ def send_file(
     media_path: str,
     message: str = "",
     quoted_message_id: str = None,
-    quoted_chat_jid: str = None
+    quoted_chat_jid: str = None,
+    mentions: list[str] = None
 ) -> Dict[str, Any]:
     """Send a file such as a picture, raw audio, video or document via WhatsApp to the specified recipient. For group messages use the JID.
 
@@ -208,12 +263,15 @@ def send_file(
         message: Optional caption text for the media
         quoted_message_id: Optional message ID to reply to (quote reply)
         quoted_chat_jid: Optional chat JID where the quoted message is from
+        mentions: Optional list of phone numbers to mention (e.g., ["905551234567"])
 
     Returns:
         A dictionary containing success status and a status message
     """
+    resolved_mentions, error = _resolve_mentions(mentions)
+    if error:
+        return {"success": False, "message": error}
 
-    # Call the whatsapp_send_file function
     success, status_message = whatsapp_send_file(recipient, media_path, message, quoted_message_id, quoted_chat_jid)
     return {
         "success": success,
