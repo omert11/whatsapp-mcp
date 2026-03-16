@@ -435,11 +435,32 @@ func sendWhatsAppMessage(client *whatsmeow.Client, messageStore *MessageStore, r
 	}
 
 	// Send message
-	_, err = client.SendMessage(context.Background(), recipientJID, msg)
+	resp, err := client.SendMessage(context.Background(), recipientJID, msg)
 
 	if err != nil {
 		return false, fmt.Sprintf("Error sending message: %v", err)
 	}
+
+	// Store sent message in DB
+	chatJID := recipientJID.String()
+	content := message
+	mediaTypeStr := ""
+	filenameStr := ""
+	if mediaPath != "" {
+		filenameStr = mediaPath[strings.LastIndex(mediaPath, "/")+1:]
+		if msg.ImageMessage != nil {
+			mediaTypeStr = "image"
+		} else if msg.VideoMessage != nil {
+			mediaTypeStr = "video"
+		} else if msg.AudioMessage != nil {
+			mediaTypeStr = "audio"
+		} else if msg.DocumentMessage != nil {
+			mediaTypeStr = "document"
+		}
+	}
+	messageStore.StoreMessage(resp.ID, chatJID, "me", content, time.Now(), true,
+		mediaTypeStr, filenameStr, "", nil, nil, nil, 0)
+	messageStore.StoreChat(chatJID, "", time.Now())
 
 	return true, fmt.Sprintf("Message sent to %s", recipient)
 }
