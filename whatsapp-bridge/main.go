@@ -107,6 +107,15 @@ func (store *MessageStore) StoreChat(jid, name string, lastMessageTime time.Time
 	return err
 }
 
+// Update message content (for edited messages)
+func (store *MessageStore) UpdateMessageContent(id, chatJID, newContent string) error {
+	_, err := store.db.Exec(
+		"UPDATE messages SET content = ? WHERE id = ? AND chat_jid = ?",
+		newContent, id, chatJID,
+	)
+	return err
+}
+
 // Store a message in the database
 func (store *MessageStore) StoreMessage(id, chatJID, sender, content string, timestamp time.Time, isFromMe bool,
 	mediaType, filename, url string, mediaKey, fileSHA256, fileEncSHA256 []byte, fileLength uint64) error {
@@ -539,6 +548,27 @@ func handleMessage(client *whatsmeow.Client, messageStore *MessageStore, msg *ev
 
 	// Extract text content
 	content := extractTextContent(msg.Message)
+
+	// Handle edited messages - update existing message content
+	if msg.IsEdit {
+		if msg.RawMessage != nil {
+			if pm := msg.RawMessage.GetProtocolMessage(); pm != nil {
+				if key := pm.GetKey(); key != nil {
+					origID := key.GetID()
+					if origID != "" {
+						err = messageStore.UpdateMessageContent(origID, chatJID, content)
+						if err != nil {
+							logger.Warnf("Failed to update edited message: %v", err)
+						} else {
+							logger.Infof("Updated edited message %s in %s", origID, chatJID)
+						}
+						return
+					}
+				}
+			}
+		}
+		return
+	}
 
 	// Extract media info
 	mediaType, filename, url, mediaKey, fileSHA256, fileEncSHA256, fileLength := extractMediaInfo(msg.Message)
