@@ -918,6 +918,142 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		})
 	})
 
+	// Handler for refreshing chats (get all groups and update names)
+	http.HandleFunc("/api/refresh-chats", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		groups, err := client.GetJoinedGroups(context.Background())
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Error getting groups: %v", err),
+			})
+			return
+		}
+
+		updated := 0
+		for _, g := range groups {
+			jid := g.JID.String()
+			name := g.Name
+			if name != "" {
+				messageStore.StoreChat(jid, name, time.Now())
+				updated++
+			}
+		}
+
+		// Also refresh contacts from store
+		contacts, err := client.Store.Contacts.GetAllContacts(context.Background())
+		if err == nil {
+			for jid, contact := range contacts {
+				name := contact.FullName
+				if name == "" {
+					name = contact.PushName
+				}
+				if name != "" {
+					messageStore.StoreChat(jid.String(), name, time.Now())
+					updated++
+				}
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": fmt.Sprintf("Refreshed %d chats (%d groups)", updated, len(groups)),
+		})
+	})
+
+	// Handler for clearing and rebuilding message DB
+	http.HandleFunc("/api/reset-messages", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		_, err := messageStore.db.Exec("DELETE FROM messages")
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusInternalServerError)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"message": fmt.Sprintf("Error clearing messages: %v", err),
+			})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"success": true,
+			"message": "Messages cleared. New messages will be stored as they arrive. Reconnect to trigger history sync.",
+		})
+	})
+
+	// Handler for getting chat/group info
+	http.HandleFunc("/api/chat-info", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			ChatJID string `json:"chat_jid"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatJID == "" {
+			http.Error(w, "chat_jid is required", http.StatusBadRequest)
+			return
+		}
+
+		jid, err := types.ParseJID(req.ChatJID)
+		if err != nil {
+			http.Error(w, "Invalid JID", http.StatusBadRequest)
+			return
+		}
+
+		result := map[string]interface{}{
+			"jid": req.ChatJID,
+		}
+
+		if jid.Server == "g.us" {
+			// Group chat
+			groupInfo, err := client.GetGroupInfo(context.Background(), jid)
+			if err == nil {
+				result["name"] = groupInfo.Name
+				result["topic"] = groupInfo.Topic
+				result["owner"] = groupInfo.OwnerJID.String()
+				result["created"] = groupInfo.GroupCreated
+				participants := []map[string]interface{}{}
+				for _, p := range groupInfo.Participants {
+					participants = append(participants, map[string]interface{}{
+						"jid":      p.JID.String(),
+						"is_admin": p.IsAdmin,
+					})
+				}
+				result["participants"] = participants
+				result["type"] = "group"
+			} else {
+				result["error"] = err.Error()
+			}
+		} else {
+			// Direct chat
+			contact, err := client.Store.Contacts.GetContact(context.Background(), jid)
+			if err == nil {
+				result["name"] = contact.FullName
+				result["push_name"] = contact.PushName
+				result["type"] = "direct"
+			} else {
+				result["error"] = err.Error()
+			}
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(result)
+	})
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)

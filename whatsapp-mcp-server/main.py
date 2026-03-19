@@ -1,7 +1,8 @@
 import sqlite3
 from typing import List, Dict, Any, Optional
 from mcp.server.fastmcp import FastMCP
-from whatsapp import MESSAGES_DB_PATH
+import requests
+from whatsapp import MESSAGES_DB_PATH, WHATSAPP_API_BASE_URL
 from whatsapp import (
     search_contacts as whatsapp_search_contacts,
     list_messages as whatsapp_list_messages,
@@ -384,6 +385,49 @@ def download_media(message_id: str, chat_jid: str) -> Dict[str, Any]:
             "success": False,
             "message": "Failed to download media"
         }
+
+@mcp.tool()
+def refresh_chats() -> Dict[str, Any]:
+    """Refresh all chat names and group info from WhatsApp. Updates chat list with latest group names and contact info."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/refresh-chats"
+        response = requests.post(url)
+        if response.status_code == 200:
+            return response.json()
+        return {"success": False, "message": f"Error: HTTP {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
+def reset_messages() -> Dict[str, Any]:
+    """Clear all stored messages from the database. Chat history will rebuild as new messages arrive. Use this to fix stale/corrupted message data."""
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/reset-messages"
+        response = requests.post(url)
+        if response.status_code == 200:
+            return response.json()
+        return {"success": False, "message": f"Error: HTTP {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
+
+@mcp.tool()
+def get_chat_info(chat_jid: str) -> Dict[str, Any]:
+    """Get detailed info about a chat or group including participants, topic, and admin status.
+
+    Args:
+        chat_jid: The JID of the chat (e.g., "120363xxx@g.us" for groups)
+
+    Returns:
+        Chat/group details including name, participants, and metadata
+    """
+    try:
+        url = f"{WHATSAPP_API_BASE_URL}/chat-info"
+        response = requests.post(url, json={"chat_jid": chat_jid})
+        if response.status_code == 200:
+            return response.json()
+        return {"success": False, "message": f"Error: HTTP {response.status_code}"}
+    except Exception as e:
+        return {"success": False, "message": str(e)}
 
 if __name__ == "__main__":
     # Initialize and run the server
