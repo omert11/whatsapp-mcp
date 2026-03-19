@@ -1054,6 +1054,96 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 		json.NewEncoder(w).Encode(result)
 	})
 
+	// Handler for getting recent messages from a chat
+	http.HandleFunc("/api/messages", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			ChatJID string `json:"chat_jid"`
+			Limit   int    `json:"limit"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.ChatJID == "" {
+			http.Error(w, "chat_jid is required", http.StatusBadRequest)
+			return
+		}
+		if req.Limit <= 0 {
+			req.Limit = 5
+		}
+
+		rows, err := messageStore.db.Query(
+			"SELECT id, sender, content, timestamp, is_from_me, media_type FROM messages WHERE chat_jid = ? ORDER BY timestamp DESC LIMIT ?",
+			req.ChatJID, req.Limit,
+		)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var messages []map[string]interface{}
+		for rows.Next() {
+			var id, sender, content, mediaType string
+			var timestamp time.Time
+			var isFromMe bool
+			rows.Scan(&id, &sender, &content, &timestamp, &isFromMe, &mediaType)
+			messages = append(messages, map[string]interface{}{
+				"id":         id,
+				"sender":     sender,
+				"content":    content,
+				"timestamp":  timestamp.Format("2006-01-02 15:04:05"),
+				"is_from_me": isFromMe,
+				"media_type": mediaType,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(messages)
+	})
+
+	// Handler for getting a single message by ID
+	http.HandleFunc("/api/message", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			MessageID string `json:"message_id"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.MessageID == "" {
+			http.Error(w, "message_id is required", http.StatusBadRequest)
+			return
+		}
+
+		var id, chatJID, sender, content, mediaType string
+		var timestamp time.Time
+		var isFromMe bool
+		err := messageStore.db.QueryRow(
+			"SELECT id, chat_jid, sender, content, timestamp, is_from_me, media_type FROM messages WHERE id = ?",
+			req.MessageID,
+		).Scan(&id, &chatJID, &sender, &content, &timestamp, &isFromMe, &mediaType)
+
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(map[string]interface{}{"error": "Message not found"})
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":         id,
+			"chat_jid":   chatJID,
+			"sender":     sender,
+			"content":    content,
+			"timestamp":  timestamp.Format("2006-01-02 15:04:05"),
+			"is_from_me": isFromMe,
+			"media_type": mediaType,
+		})
+	})
+
 	// Start the server
 	serverAddr := fmt.Sprintf(":%d", port)
 	fmt.Printf("Starting REST API server on %s...\n", serverAddr)
