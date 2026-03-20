@@ -1028,8 +1028,17 @@ func startRESTServer(client *whatsmeow.Client, messageStore *MessageStore, port 
 				result["created"] = groupInfo.GroupCreated
 				participants := []map[string]interface{}{}
 				for _, p := range groupInfo.Participants {
+					pName := ""
+					contact, cerr := client.Store.Contacts.GetContact(context.Background(), p.JID)
+					if cerr == nil {
+						pName = contact.FullName
+						if pName == "" {
+							pName = contact.PushName
+						}
+					}
 					participants = append(participants, map[string]interface{}{
 						"jid":      p.JID.String(),
+						"name":     pName,
 						"is_admin": p.IsAdmin,
 					})
 				}
